@@ -8,6 +8,8 @@ import { mirror } from "../src/lib/mirror.js";
 import { materialize } from "../src/lib/cow.js";
 import { initCommand } from "../src/commands/init.js";
 import { workspaceCreate } from "../src/commands/workspace.js";
+import { initStore } from "../src/core/init.js";
+import { createWorkspace, listWorkspaces, removeWorkspace } from "../src/core/workspaces.js";
 import { readConfig, workspacePath, storeExists } from "../src/lib/store.js";
 
 let tmp: string;
@@ -126,5 +128,23 @@ describe("init + workspace create (e2e via cwd)", () => {
 
     const settings = JSON.parse(await fs.readFile(path.join(wsDir, ".claude", "settings.json"), "utf8"));
     expect(settings.hooks.PreToolUse[0].matcher).toBe("Edit|Write|MultiEdit");
+  });
+});
+
+describe("core workspaces (used by the interactive UI)", () => {
+  it("createWorkspace records fileCount and listWorkspaces returns it", async () => {
+    await initStore(tmp, {});
+    const { stats } = await createWorkspace(tmp, "ws1");
+
+    const list = await listWorkspaces(tmp);
+    expect(list).toHaveLength(1);
+    expect(list[0].name).toBe("ws1");
+    expect(list[0].fileCount).toBe(stats.links);
+    expect(list[0].fileCount).toBeGreaterThanOrEqual(2);
+
+    await expect(createWorkspace(tmp, "ws1")).rejects.toThrow(/already exists/);
+
+    await removeWorkspace(tmp, "ws1");
+    expect(await listWorkspaces(tmp)).toHaveLength(0);
   });
 });

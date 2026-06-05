@@ -1,6 +1,7 @@
 import { select } from "@inquirer/prompts";
-import { isGitRepo, currentBranch, listBranches, branchCommit } from "../lib/git.js";
-import { storeExists, writeConfig, storePath, type Config } from "../lib/store.js";
+import { isGitRepo, currentBranch, listBranches } from "../lib/git.js";
+import { storeExists, storePath } from "../lib/store.js";
+import { initStore } from "../core/init.js";
 
 export interface InitOptions {
   force?: boolean;
@@ -18,47 +19,35 @@ export async function initCommand(opts: InitOptions): Promise<void> {
     return;
   }
 
-  let baseBranch: string | null = null;
-  let baseCommit: string | null = null;
+  let branch: string | null = opts.branch ?? null;
 
-  if (await isGitRepo(targetRoot)) {
+  if (!branch && (await isGitRepo(targetRoot))) {
     const current = await currentBranch(targetRoot);
-
-    if (opts.branch) {
-      baseBranch = opts.branch;
+    const branches = await listBranches(targetRoot);
+    if (branches.length > 0) {
+      branch = await select({
+        message: "Select base git branch:",
+        default: current ?? branches[0],
+        choices: branches.map((b) => ({
+          name: b === current ? `${b} (current)` : b,
+          value: b,
+        })),
+      });
     } else {
-      const branches = await listBranches(targetRoot);
-      if (branches.length > 0) {
-        baseBranch = await select({
-          message: "Select base git branch:",
-          default: current ?? branches[0],
-          choices: branches.map((b) => ({
-            name: b === current ? `${b} (current)` : b,
-            value: b,
-          })),
-        });
-      } else {
-        baseBranch = current;
-      }
+      branch = current;
     }
+  }
 
-    if (baseBranch) baseCommit = await branchCommit(targetRoot, baseBranch);
+  const config = await initStore(targetRoot, { branch, force: opts.force });
+
+  if (config.baseBranch) {
     console.log(
-      `Base branch: ${baseBranch ?? "(none)"}${baseCommit ? ` @ ${baseCommit.slice(0, 8)}` : ""}`,
+      `Base branch: ${config.baseBranch}${config.baseCommit ? ` @ ${config.baseCommit.slice(0, 8)}` : ""}`,
     );
   } else {
     console.log("Not a git repository — proceeding without base branch selection.");
   }
 
-  const config: Config = {
-    version: 1,
-    targetRoot,
-    baseBranch,
-    baseCommit,
-    createdAt: new Date().toISOString(),
-  };
-
-  await writeConfig(targetRoot, config);
   console.log(`Initialized .feverdreams store at ${storePath(targetRoot)}`);
   console.log("Next: feverdreams workspace create <name>");
 }

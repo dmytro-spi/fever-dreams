@@ -1,25 +1,14 @@
-import { promises as fs } from "node:fs";
 import { confirm } from "@inquirer/prompts";
+import { storeExists, workspacePath } from "../lib/store.js";
 import {
-  readConfig,
-  storeExists,
-  workspacePath,
-  workspacesPath,
-  writeWorkspaceMeta,
-  readWorkspaceMeta,
-  type WorkspaceMeta,
-} from "../lib/store.js";
-import { buildMatcher } from "../lib/ignore.js";
-import { mirror } from "../lib/mirror.js";
-import { writeAgentScaffold } from "../lib/scaffold.js";
-
-function validateName(name: string): void {
-  if (!/^[A-Za-z0-9._-]+$/.test(name)) {
-    throw new Error(`Invalid workspace name "${name}". Use letters, digits, '.', '_', '-'.`);
-  }
-}
+  createWorkspace,
+  listWorkspaces,
+  removeWorkspace,
+  agentInstruction,
+} from "../core/workspaces.js";
 
 async function pathExists(p: string): Promise<boolean> {
+  const { promises: fs } = await import("node:fs");
   try {
     await fs.access(p);
     return true;
@@ -31,42 +20,21 @@ async function pathExists(p: string): Promise<boolean> {
 export async function workspaceCreate(name: string): Promise<void> {
   const targetRoot = process.cwd();
 
-  if (!(await storeExists(targetRoot))) {
-    console.error("No .feverdreams store here. Run `feverdreams init` first.");
+  try {
+    console.log(`Creating workspace "${name}"…`);
+    const { dest, stats } = await createWorkspace(targetRoot, name);
+
+    console.log(`✅ Workspace ready: ${dest}`);
+    console.log(
+      `   ${stats.links} linked files, ${stats.dirs} dirs, ${stats.skipped} skipped (ignored).`,
+    );
+    console.log("");
+    console.log("Tell your AI agent:");
+    console.log(`   "${agentInstruction(dest)}"`);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
     process.exitCode = 1;
-    return;
   }
-
-  validateName(name);
-  const dest = workspacePath(targetRoot, name);
-  if (await pathExists(dest)) {
-    console.error(`Workspace "${name}" already exists.`);
-    process.exitCode = 1;
-    return;
-  }
-
-  const config = await readConfig(targetRoot);
-  const matcher = await buildMatcher(targetRoot);
-
-  console.log(`Creating workspace "${name}"…`);
-  const stats = await mirror(targetRoot, dest, matcher);
-
-  const meta: WorkspaceMeta = {
-    name,
-    baseBranch: config.baseBranch,
-    baseCommit: config.baseCommit,
-    sourceRoot: targetRoot,
-    createdAt: new Date().toISOString(),
-  };
-  await writeWorkspaceMeta(dest, meta);
-  await writeAgentScaffold(dest, name);
-
-  console.log(`✅ Workspace ready: ${dest}`);
-  console.log(`   ${stats.links} linked files, ${stats.dirs} dirs, ${stats.skipped} skipped (ignored).`);
-  console.log("");
-  console.log("Tell your AI agent:");
-  console.log(`   "Work only inside ${dest}. Read and edit files there;`);
-  console.log(`    your edits become real copies automatically (copy-on-write)."`);
 }
 
 export async function workspaceList(): Promise<void> {
@@ -77,25 +45,15 @@ export async function workspaceList(): Promise<void> {
     return;
   }
 
-  const dir = workspacesPath(targetRoot);
-  let names: string[] = [];
-  try {
-    names = (await fs.readdir(dir, { withFileTypes: true }))
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name);
-  } catch {
-    // workspaces dir not created yet
-  }
-
-  if (names.length === 0) {
+  const workspaces = await listWorkspaces(targetRoot);
+  if (workspaces.length === 0) {
     console.log("No workspaces yet. Create one with `feverdreams workspace create <name>`.");
     return;
   }
 
-  for (const n of names) {
-    const meta = await readWorkspaceMeta(workspacePath(targetRoot, n));
-    const base = meta?.baseBranch ? ` (base: ${meta.baseBranch})` : "";
-    console.log(`• ${n}${base}`);
+  for (const ws of workspaces) {
+    const base = ws.baseBranch ? ` (base: ${ws.baseBranch})` : "";
+    console.log(`• ${ws.name}${base}`);
   }
 }
 
@@ -120,6 +78,6 @@ export async function workspaceRemove(name: string, opts: { yes?: boolean }): Pr
     }
   }
 
-  await fs.rm(dest, { recursive: true, force: true });
+  await removeWorkspace(targetRoot, name);
   console.log(`Removed workspace "${name}".`);
 }

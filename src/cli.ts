@@ -10,7 +10,13 @@ const program = new Command();
 program
   .name("feverdreams")
   .description("FeverDreams — copy-on-write AI agent workspaces over your project")
-  .version("0.1.0");
+  .version("0.1.0")
+  .action(async () => {
+    // Bare `feverdreams` (no subcommand) launches the interactive UI.
+    // Dynamic import keeps Ink off the hot path of `hook run` and other commands.
+    const { runUI } = await import("./ui/run.js");
+    await runUI();
+  });
 
 program
   .command("init")

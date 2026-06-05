@@ -2,10 +2,13 @@
 
 > Copy-on-write AI agent workspaces over your project.
 
-FeverDreams is a terminal CLI that lets an AI agent (or you) work on an isolated
+FeverDreams is a terminal app that lets an AI agent (or you) work on an isolated
 **copy of your project without actually copying it**. Each workspace mirrors your
 files as symlinks; the moment a file is *edited*, that one file is turned into a
 real copy (copy-on-write). Your original project is never touched.
+
+Run `feverdreams` for an interactive, arrow-key-driven UI, or use the individual
+subcommands for scripting.
 
 ## Why
 
@@ -54,6 +57,40 @@ npm link            # exposes the `feverdreams` command on your PATH
 
 ## Usage
 
+### Interactive UI
+
+Run `feverdreams` with **no arguments** to open the full-screen terminal UI — the
+easiest way to drive everything. It's an always-running app (built with
+[Ink](https://github.com/vadimdemedes/ink)); navigate with the arrow keys.
+
+```
+╭─ FeverDreams ─────────────────────────────╮
+│ store: .feverdreams   base: main @ 7f62d93 │
+╰────────────────────────────────────────────╯
+ Workspaces (2)
+ ❯ ws1   3 files · base main
+   ws2   5 files · base main
+ ↑↓ move   ↵ open   n new   m materialize   d delete   r reload   q quit
+```
+
+| Key | Action |
+| --- | --- |
+| `↑` / `↓` | Move the selection |
+| `↵` | Open the selected workspace (path + ready-to-paste agent instruction) |
+| `n` | Create a new workspace (prompts for a name) |
+| `m` | Copy-on-write a file in the selected workspace (prompts for a path) |
+| `d` | Delete the selected workspace (confirm with `y`) |
+| `r` | Reload the list |
+| `i` | Initialize the store (shown when the folder has none; picks a base branch) |
+| `q` / `Ctrl-C` | Quit · `esc` cancels a prompt or goes back |
+
+The UI requires an interactive terminal (TTY). Piped or non-interactive
+invocations print a hint and fall back to the subcommands below.
+
+### Scripting / subcommands
+
+Every action is also a plain subcommand, for automation or non-TTY environments:
+
 ```bash
 # 1. Initialize the store in your project (pick a base git branch if it's a repo)
 cd your-project
@@ -78,6 +115,7 @@ feverdreams materialize ws1 src/app.ts
 
 | Command | Description |
 | --- | --- |
+| `feverdreams` | Launch the interactive full-screen UI (requires a TTY). |
 | `feverdreams init` | Create the `.feverdreams/` store. In a git repo, prompts for the base branch (use `-b <name>` to skip, `-f` to reinitialize). |
 | `feverdreams workspace create <name>` | Mirror the project into a new workspace (real dirs + per-file symlinks), skipping ignored paths. Writes `CLAUDE.md` + a Claude Code hook. |
 | `feverdreams workspace list` | List workspaces. |

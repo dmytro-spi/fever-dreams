@@ -20,6 +20,8 @@ export interface WorkspaceMeta {
   baseCommit: string | null;
   sourceRoot: string;
   createdAt: string;
+  /** Number of files mirrored as symlinks at creation time (null for older workspaces). */
+  fileCount?: number;
 }
 
 export function storePath(targetRoot: string): string {
