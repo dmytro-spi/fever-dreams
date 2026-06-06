@@ -4,6 +4,7 @@ import { initCommand } from "./commands/init.js";
 import { workspaceCreate, workspaceList, workspaceRemove } from "./commands/workspace.js";
 import { materializeCommand } from "./commands/materialize.js";
 import { applyCommand, revertCommand, statusCommand } from "./commands/apply.js";
+import { branchCommand } from "./commands/branch.js";
 import { diffCommand } from "./commands/diff.js";
 import { hookRun } from "./commands/hook.js";
 
@@ -66,6 +67,14 @@ program
   .description("Restore the base to its pristine state and clear the apply session")
   .option("-f, --force", "Force-release a stuck lock even if no manifest is present")
   .action((workspace, opts) => revertCommand(workspace, opts));
+
+program
+  .command("branch <workspace> <name>")
+  .description("Apply a workspace, commit it to a new git branch, then restore the base")
+  .requiredOption("-m, --message <msg>", "Commit message for the branch")
+  .option("--push", "Push the new branch to origin (-u) after committing")
+  .action((workspace, name, opts) =>
+    branchCommand(workspace, name, { message: opts.message, push: opts.push }));
 
 program
   .command("status")

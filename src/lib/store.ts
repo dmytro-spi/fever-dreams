@@ -127,7 +127,7 @@ export interface ApplyHolder {
   session: string | null;
 }
 
-export type ApplyOperation = "apply" | "apply-test";
+export type ApplyOperation = "apply" | "apply-test" | "branch";
 
 /**
  * Atomic "base is busy" marker, written exclusively at the start of an apply and

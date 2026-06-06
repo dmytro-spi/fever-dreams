@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
 
@@ -17,6 +19,8 @@ import {
   applyTest,
   currentApplySession,
 } from "../src/core/apply.js";
+import { createBranchFromWorkspace } from "../src/core/branch.js";
+import { currentBranch, isClean, branchExists } from "../src/lib/git.js";
 import {
   readConfig,
   workspacePath,
@@ -273,5 +277,118 @@ describe("apply-to-base / revert", () => {
     await revertFromBase(tmp, { force: true });
     expect(await readApplyLock(tmp)).toBeNull();
     expect(await fs.readFile(path.join(tmp, "src", "index.ts"), "utf8")).toBe(ORIGINAL);
+  });
+});
+
+describe("branch from workspace (real git repo)", () => {
+  const ORIGINAL = "export const x = 1;\n";
+  const pexec = promisify(execFile);
+
+  async function git(cwd: string, ...args: string[]): Promise<string> {
+    const { stdout } = await pexec("git", args, { cwd });
+    return stdout;
+  }
+
+  /** Init a real git repo on branch `main` with the project files committed. */
+  async function makeGitProject(root: string): Promise<void> {
+    await git(root, "init");
+    await git(root, "config", "user.email", "test@feverdreams.dev");
+    await git(root, "config", "user.name", "FeverDreams Test");
+    await git(root, "checkout", "-b", "main");
+    // Commit only the project files; `.feverdreams` doesn't exist yet (init runs later).
+    await git(root, "add", "-A");
+    await git(root, "commit", "-m", "init");
+  }
+
+  async function makeWorkspaceWithChanges(name: string): Promise<string> {
+    await createWorkspace(tmp, name);
+    const wsDir = workspacePath(tmp, name);
+    const link = path.join(wsDir, "src", "index.ts");
+    await materialize(link);
+    await fs.writeFile(link, "export const x = 2;\n");
+    await fs.mkdir(path.join(wsDir, "lib"), { recursive: true });
+    await fs.writeFile(path.join(wsDir, "lib", "new.ts"), "export const y = 9;\n");
+    return wsDir;
+  }
+
+  it("commits the workspace onto a new branch and restores the base", async () => {
+    await makeGitProject(tmp);
+    await initStore(tmp, {});
+    await makeWorkspaceWithChanges("ws1");
+
+    const res = await createBranchFromWorkspace(tmp, "ws1", "feature-x", "add feature x");
+    expect(res.branch).toBe("feature-x");
+    expect(res.baseBranch).toBe("main");
+    expect(res.files).toBe(2);
+    expect(res.pushed).toBe(false);
+
+    // Back on the base branch with a clean (tracked) tree.
+    expect(await currentBranch(tmp)).toBe("main");
+    expect(await isClean(tmp)).toBe(true);
+
+    // The branch holds the changes.
+    expect(await branchExists(tmp, "feature-x")).toBe(true);
+    expect(await git(tmp, "show", "feature-x:src/index.ts")).toBe("export const x = 2;\n");
+    expect(await git(tmp, "show", "feature-x:lib/new.ts")).toBe("export const y = 9;\n");
+
+    // The base working tree is pristine and the added file is gone.
+    expect(await fs.readFile(path.join(tmp, "src", "index.ts"), "utf8")).toBe(ORIGINAL);
+    await expect(fs.access(path.join(tmp, "lib", "new.ts"))).rejects.toThrow();
+
+    // The lock was released and the store was NOT committed onto the branch.
+    expect(await readApplyLock(tmp)).toBeNull();
+    await expect(git(tmp, "show", "feature-x:.feverdreams/config.json")).rejects.toThrow();
+  });
+
+  it("refuses when the base repo has uncommitted tracked changes", async () => {
+    await makeGitProject(tmp);
+    await initStore(tmp, {});
+    await makeWorkspaceWithChanges("ws1");
+
+    // Dirty a tracked file in the base.
+    await fs.writeFile(path.join(tmp, "src", "index.ts"), "export const x = 42;\n");
+
+    await expect(createBranchFromWorkspace(tmp, "ws1", "feature-x", "msg")).rejects.toThrow(
+      /uncommitted changes/,
+    );
+    // Nothing was created and the lock is free.
+    expect(await branchExists(tmp, "feature-x")).toBe(false);
+    expect(await readApplyLock(tmp)).toBeNull();
+  });
+
+  it("refuses when the target branch already exists", async () => {
+    await makeGitProject(tmp);
+    await initStore(tmp, {});
+    await makeWorkspaceWithChanges("ws1");
+    await git(tmp, "branch", "feature-x");
+
+    await expect(createBranchFromWorkspace(tmp, "ws1", "feature-x", "msg")).rejects.toThrow(
+      /already exists/,
+    );
+    expect(await readApplyLock(tmp)).toBeNull();
+  });
+
+  it("refuses --push when there is no origin remote", async () => {
+    await makeGitProject(tmp);
+    await initStore(tmp, {});
+    await makeWorkspaceWithChanges("ws1");
+
+    await expect(
+      createBranchFromWorkspace(tmp, "ws1", "feature-x", "msg", { push: true }),
+    ).rejects.toThrow(/origin/);
+    expect(await branchExists(tmp, "feature-x")).toBe(false);
+    expect(await readApplyLock(tmp)).toBeNull();
+  });
+
+  it("propagates 'no changes' from a workspace with nothing to apply", async () => {
+    await makeGitProject(tmp);
+    await initStore(tmp, {});
+    await createWorkspace(tmp, "empty");
+
+    await expect(createBranchFromWorkspace(tmp, "empty", "feature-x", "msg")).rejects.toThrow(
+      /no changes/,
+    );
+    expect(await branchExists(tmp, "feature-x")).toBe(false);
+    expect(await readApplyLock(tmp)).toBeNull();
   });
 });

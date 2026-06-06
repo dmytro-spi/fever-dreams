@@ -19,6 +19,7 @@ import {
 } from "../core/workspaces.js";
 import { materialize } from "../lib/cow.js";
 import { currentApplyLock, applyToBase, revertFromBase } from "../core/apply.js";
+import { createBranchFromWorkspace } from "../core/branch.js";
 import { collectChanges } from "../core/diff.js";
 import { Header } from "./components/Header.js";
 import { Footer } from "./components/Footer.js";
@@ -34,7 +35,9 @@ type View =
   | "detail"
   | "create"
   | "confirm-delete"
-  | "materialize";
+  | "materialize"
+  | "branch-name"
+  | "branch-message";
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -44,11 +47,13 @@ const HINTS: Record<View, string> = {
   loading: "loading…",
   "no-store": "i init   q quit",
   "branch-select": "↑↓ move   ↵ select   esc cancel",
-  list: "↑↓ move  ↵ open  n new  m materialize  a apply  v revert  d delete  q quit",
+  list: "↑↓ move  ↵ open  n new  m materialize  a apply  b branch  v revert  d delete  q quit",
   detail: "esc back   q quit",
   create: "enter confirm   esc cancel",
   "confirm-delete": "y confirm   n cancel",
   materialize: "enter confirm   esc cancel",
+  "branch-name": "enter next   esc cancel",
+  "branch-message": "enter create   esc cancel",
 };
 
 export function App() {
@@ -64,6 +69,7 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [applied, setApplied] = useState<string | null>(null);
   const [detailSummary, setDetailSummary] = useState<string | null>(null);
+  const [branchName, setBranchName] = useState("");
 
   async function reload(): Promise<void> {
     if (await storeExists(targetRoot)) {
@@ -178,6 +184,35 @@ export function App() {
     }
   }
 
+  function startBranchMessage(name: string): void {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setView("list");
+      return;
+    }
+    setBranchName(trimmed);
+    setView("branch-message");
+  }
+
+  async function doBranch(message: string): Promise<void> {
+    const ws = workspaces[selected];
+    const trimmed = message.trim();
+    if (!ws || !trimmed) {
+      setView("list");
+      return;
+    }
+    setView("list");
+    try {
+      const r = await createBranchFromWorkspace(targetRoot, ws.name, branchName, trimmed);
+      setNotice(
+        `Created branch "${r.branch}" from "${r.baseBranch}" — ${r.files} file(s). Base restored.`,
+      );
+      await reload();
+    } catch (e) {
+      setNotice(errMsg(e));
+    }
+  }
+
   async function doRevert(): Promise<void> {
     try {
       const manifest = await revertFromBase(targetRoot, {});
@@ -214,7 +249,7 @@ export function App() {
 
   useInput((input, key) => {
     // Text-entry views own their input (handled by TextPrompt).
-    if (view === "create" || view === "materialize") return;
+    if (["create", "materialize", "branch-name", "branch-message"].includes(view)) return;
 
     if (key.ctrl && input === "c") {
       exit();
@@ -264,6 +299,12 @@ export function App() {
     } else if (input === "a") {
       setNotice(null);
       void doApply();
+    } else if (input === "b") {
+      if (workspaces[selected]) {
+        setNotice(null);
+        setBranchName("");
+        setView("branch-name");
+      }
     } else if (input === "v") {
       setNotice(null);
       void doRevert();
@@ -333,6 +374,24 @@ export function App() {
           label={`Materialize file in "${selectedWs.name}" (path relative to workspace):`}
           placeholder="src/app.ts"
           onSubmit={(v) => void doMaterialize(v)}
+          onCancel={() => setView("list")}
+        />
+      )}
+
+      {view === "branch-name" && selectedWs && (
+        <TextPrompt
+          label={`New git branch from "${selectedWs.name}":`}
+          placeholder="my-feature"
+          onSubmit={(v) => startBranchMessage(v)}
+          onCancel={() => setView("list")}
+        />
+      )}
+
+      {view === "branch-message" && selectedWs && (
+        <TextPrompt
+          label={`Commit message for "${branchName}":`}
+          placeholder="add my feature"
+          onSubmit={(v) => void doBranch(v)}
           onCancel={() => setView("list")}
         />
       )}
