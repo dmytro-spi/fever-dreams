@@ -4,7 +4,7 @@
   "description": "FeverDreams — copy-on-write AI agent workspaces over your project",
   "type": "module",
   "license": "MIT",
-  "author": "Dmytro Spivak <dmytro.spivak@namecheap.com>",
+  "author": "Dmytro Spivak <hello@dispivak.com>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/dmytro-spi/fever-dreams.git"
