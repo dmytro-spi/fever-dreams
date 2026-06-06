@@ -7,18 +7,25 @@ FeverDreams is a terminal app that lets an AI agent (or you) work on an isolated
 files as symlinks; the moment a file is *edited*, that one file is turned into a
 real copy (copy-on-write). Your original project is never touched.
 
-Run `feverdreams` for an interactive, arrow-key-driven UI, or use the individual
-subcommands for scripting.
+Three ways to drive it: run `feverdreams` for an interactive, arrow-key-driven UI,
+use the individual subcommands for scripting, or let an AI agent drive it directly
+via the bundled [Claude Code plugin](#use-it-from-your-ai-agent-plugin) (portable to
+other agents via [`AGENTS.md`](./AGENTS.md)).
 
 ## Why
 
-When an AI agent edits files in place, a bad change can corrupt your working tree.
-Full copies of a repo are slow and waste disk (think `node_modules`). FeverDreams
-gives each agent a cheap, isolated workspace:
+You want to run several pieces of work over one project at the same time — a few
+agents, or a few tasks of your own — without them stepping on each other's files.
+Sharing one working tree means constant conflicts; making a full copy per task is
+slow and wastes disk (think `node_modules`). FeverDreams gives each task its own
+cheap, isolated workspace:
 
+- **Parallel & conflict-free** — every workspace edits its own files, so multiple
+  tasks run side by side without colliding on the shared tree.
 - **Reads** pass straight through to the originals (symlinks) — zero copy cost.
-- **Writes** trigger copy-on-write — only modified files become real copies.
-- The original project stays pristine; throw a workspace away with no consequences.
+- **Writes** trigger copy-on-write — only the files a task touches become real copies.
+- The original project stays the shared source of truth; throw any workspace away
+  with no consequences.
 
 ## How it works
 
@@ -78,6 +85,29 @@ npm link            # exposes the `feverdreams` command on your PATH
 
 > The Claude Code hook calls `feverdreams hook run`, so the command must be on
 > PATH (`npm link` or `npm install -g`).
+
+## Use it from your AI agent (plugin)
+
+FeverDreams ships as a **Claude Code plugin** so an agent in your repo knows how to
+reach for an isolated workspace on its own. Install it (the repo is its own
+marketplace):
+
+```
+/plugin marketplace add dmytro-spi/fever-dreams
+/plugin install feverdreams@feverdreams
+/reload-plugins
+```
+
+This adds a model-invocable `feverdreams` skill (the agent uses it automatically when
+you ask to "try this safely", sandbox a change, or land experimental work as a branch)
+plus two explicit commands: `/feverdreams:new <name>` and
+`/feverdreams:branch <ws> <branch> -m "msg"`. The `feverdreams` CLI must be on PATH
+(see Install above).
+
+For non-Claude tools (OpenCode, etc.), [`AGENTS.md`](./AGENTS.md) documents the same
+workflow and the portable skill lives at `skills/feverdreams/SKILL.md`. The key safety
+rule for any tool without the auto-hook: run `feverdreams materialize <ws> <path>`
+before editing a file, or the edit writes through the symlink to the original.
 
 ## Usage
 

@@ -1,0 +1,9 @@
+{
+  "name": "feverdreams",
+  "description": "Copy-on-write AI agent workspaces over your project. Spin up an isolated workspace, let an agent work in it safely, then diff / apply / branch the result without touching the base tree.",
+  "version": "0.1.0",
+  "author": { "name": "Dmytro Spivak", "email": "dmytro.spivak@namecheap.com" },
+  "homepage": "https://github.com/dmytro-spi/fever-dreams",
+  "repository": "https://github.com/dmytro-spi/fever-dreams",
+  "license": "MIT"
+}

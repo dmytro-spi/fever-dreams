@@ -1,0 +1,13 @@
+{
+  "name": "feverdreams",
+  "owner": { "name": "Dmytro Spivak", "email": "dmytro.spivak@namecheap.com" },
+  "description": "FeverDreams plugin marketplace",
+  "plugins": [
+    {
+      "name": "feverdreams",
+      "source": ".",
+      "description": "Copy-on-write AI agent workspaces over your project.",
+      "version": "0.1.0"
+    }
+  ]
+}
