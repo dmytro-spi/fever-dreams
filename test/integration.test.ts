@@ -10,7 +10,21 @@ import { initCommand } from "../src/commands/init.js";
 import { workspaceCreate } from "../src/commands/workspace.js";
 import { initStore } from "../src/core/init.js";
 import { createWorkspace, listWorkspaces, removeWorkspace } from "../src/core/workspaces.js";
-import { readConfig, workspacePath, storeExists } from "../src/lib/store.js";
+import { collectChanges } from "../src/core/diff.js";
+import {
+  applyToBase,
+  revertFromBase,
+  applyTest,
+  currentApplySession,
+} from "../src/core/apply.js";
+import {
+  readConfig,
+  workspacePath,
+  storeExists,
+  readApplyLock,
+  applyLockPath,
+  applySessionPath,
+} from "../src/lib/store.js";
 
 let tmp: string;
 let cwd: string;
@@ -146,5 +160,118 @@ describe("core workspaces (used by the interactive UI)", () => {
 
     await removeWorkspace(tmp, "ws1");
     expect(await listWorkspaces(tmp)).toHaveLength(0);
+  });
+});
+
+describe("apply-to-base / revert", () => {
+  const ORIGINAL = "export const x = 1;\n";
+
+  async function makeWorkspaceWithChanges(name: string): Promise<string> {
+    await createWorkspace(tmp, name);
+    const wsDir = workspacePath(tmp, name);
+    // Edit an existing file (materialize, then change it).
+    const link = path.join(wsDir, "src", "index.ts");
+    await materialize(link);
+    await fs.writeFile(link, "export const x = 2;\n");
+    // Add a brand-new file in a new subdirectory.
+    await fs.mkdir(path.join(wsDir, "lib"), { recursive: true });
+    await fs.writeFile(path.join(wsDir, "lib", "new.ts"), "export const y = 9;\n");
+    return wsDir;
+  }
+
+  it("collectChanges reports modified + added, ignoring untouched materializations", async () => {
+    await initStore(tmp, {});
+    const wsDir = await makeWorkspaceWithChanges("ws1");
+    // Materialize package.json WITHOUT editing — must NOT count as a change.
+    await materialize(path.join(wsDir, "package.json"));
+
+    const changes = await collectChanges(tmp, "ws1");
+    const byRel = Object.fromEntries(changes.map((c) => [c.rel, c.action]));
+    expect(byRel[path.join("src", "index.ts")]).toBe("modified");
+    expect(byRel[path.join("lib", "new.ts")]).toBe("added");
+    expect(byRel["package.json"]).toBeUndefined();
+    expect(changes).toHaveLength(2);
+  });
+
+  it("applies changes to the base and reverts to pristine", async () => {
+    await initStore(tmp, {});
+    const wsDir = await makeWorkspaceWithChanges("ws1");
+
+    await applyToBase(tmp, "ws1");
+    // Base now reflects the workspace changes.
+    expect(await fs.readFile(path.join(tmp, "src", "index.ts"), "utf8")).toBe("export const x = 2;\n");
+    expect(await fs.readFile(path.join(tmp, "lib", "new.ts"), "utf8")).toBe("export const y = 9;\n");
+    expect((await currentApplySession(tmp))?.workspace).toBe("ws1");
+
+    await revertFromBase(tmp);
+    // Base is pristine again: original restored, added file + its dir gone.
+    expect(await fs.readFile(path.join(tmp, "src", "index.ts"), "utf8")).toBe(ORIGINAL);
+    await expect(fs.access(path.join(tmp, "lib", "new.ts"))).rejects.toThrow();
+    await expect(fs.access(path.join(tmp, "lib"))).rejects.toThrow();
+    expect(await currentApplySession(tmp)).toBeNull();
+
+    // Workspace copies are untouched by the round-trip.
+    expect(await fs.readFile(path.join(wsDir, "src", "index.ts"), "utf8")).toBe("export const x = 2;\n");
+    expect(await fs.readFile(path.join(wsDir, "lib", "new.ts"), "utf8")).toBe("export const y = 9;\n");
+  });
+
+  it("enforces a single applied workspace at a time", async () => {
+    await initStore(tmp, {});
+    await makeWorkspaceWithChanges("ws1");
+    await makeWorkspaceWithChanges("ws2");
+
+    await applyToBase(tmp, "ws1");
+    await expect(applyToBase(tmp, "ws2")).rejects.toThrow(/already has "ws1"/);
+    await revertFromBase(tmp);
+  });
+
+  it("one-shot apply --run always reverts, even on command failure", async () => {
+    await initStore(tmp, {});
+    await makeWorkspaceWithChanges("ws1");
+
+    const { exitCode } = await applyTest(tmp, "ws1", "exit 3");
+    expect(exitCode).toBe(3);
+    // Reverted in the finally block regardless of the non-zero exit.
+    expect(await fs.readFile(path.join(tmp, "src", "index.ts"), "utf8")).toBe(ORIGINAL);
+    expect(await currentApplySession(tmp)).toBeNull();
+  });
+
+  it("writes a lock with holder metadata on apply and clears it on revert", async () => {
+    await initStore(tmp, {});
+    await makeWorkspaceWithChanges("ws1");
+
+    await applyToBase(tmp, "ws1");
+    const lock = await readApplyLock(tmp);
+    expect(lock?.workspace).toBe("ws1");
+    expect(lock?.operation).toBe("apply");
+    expect(lock?.holder.pid).toBe(process.pid);
+
+    await revertFromBase(tmp);
+    expect(await readApplyLock(tmp)).toBeNull();
+  });
+
+  it("force-reverts a stuck lock that has no manifest", async () => {
+    await initStore(tmp, {});
+    await makeWorkspaceWithChanges("ws1");
+
+    // Simulate a crash right after acquiring the lock, before any base mutation:
+    // a lock file exists but there is no manifest.
+    await fs.mkdir(applySessionPath(tmp), { recursive: true });
+    await fs.writeFile(
+      applyLockPath(tmp),
+      JSON.stringify({
+        workspace: "ws1",
+        operation: "apply",
+        holder: { pid: 999999, host: "ghost", session: null },
+        acquiredAt: "2026-06-06T00:00:00.000Z",
+      }),
+    );
+
+    // Without --force the base is still considered busy.
+    await expect(applyToBase(tmp, "ws1")).rejects.toThrow(/locked by/);
+    // Force-release clears the stuck lock; base was never mutated so it's pristine.
+    await revertFromBase(tmp, { force: true });
+    expect(await readApplyLock(tmp)).toBeNull();
+    expect(await fs.readFile(path.join(tmp, "src", "index.ts"), "utf8")).toBe(ORIGINAL);
   });
 });

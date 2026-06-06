@@ -3,6 +3,8 @@ import { Command } from "commander";
 import { initCommand } from "./commands/init.js";
 import { workspaceCreate, workspaceList, workspaceRemove } from "./commands/workspace.js";
 import { materializeCommand } from "./commands/materialize.js";
+import { applyCommand, revertCommand, statusCommand } from "./commands/apply.js";
+import { diffCommand } from "./commands/diff.js";
 import { hookRun } from "./commands/hook.js";
 
 const program = new Command();
@@ -47,6 +49,28 @@ program
   .command("materialize <workspace> <path>")
   .description("Replace a workspace symlink with a real copy (copy-on-write)")
   .action((workspace, p) => materializeCommand(workspace, p));
+
+program
+  .command("diff <workspace>")
+  .description("Show files a workspace would change against the base (M modified, A added)")
+  .action((workspace) => diffCommand(workspace));
+
+program
+  .command("apply <workspace>")
+  .description("Apply a workspace's changes onto the base project (backs up first)")
+  .option("--run <cmd>", "Run a command against the applied base, then auto-revert")
+  .action((workspace, opts) => applyCommand(workspace, opts));
+
+program
+  .command("revert [workspace]")
+  .description("Restore the base to its pristine state and clear the apply session")
+  .option("-f, --force", "Force-release a stuck lock even if no manifest is present")
+  .action((workspace, opts) => revertCommand(workspace, opts));
+
+program
+  .command("status")
+  .description("Show whether the base currently holds an applied workspace")
+  .action(() => statusCommand());
 
 const hook = program.command("hook").description("Claude Code hook integration");
 

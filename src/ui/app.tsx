@@ -18,6 +18,8 @@ import {
   type WorkspaceInfo,
 } from "../core/workspaces.js";
 import { materialize } from "../lib/cow.js";
+import { currentApplyLock, applyToBase, revertFromBase } from "../core/apply.js";
+import { collectChanges } from "../core/diff.js";
 import { Header } from "./components/Header.js";
 import { Footer } from "./components/Footer.js";
 import { WorkspaceList } from "./components/WorkspaceList.js";
@@ -42,7 +44,7 @@ const HINTS: Record<View, string> = {
   loading: "loading…",
   "no-store": "i init   q quit",
   "branch-select": "↑↓ move   ↵ select   esc cancel",
-  list: "↑↓ move   ↵ open   n new   m materialize   d delete   r reload   q quit",
+  list: "↑↓ move  ↵ open  n new  m materialize  a apply  v revert  d delete  q quit",
   detail: "esc back   q quit",
   create: "enter confirm   esc cancel",
   "confirm-delete": "y confirm   n cancel",
@@ -60,13 +62,17 @@ export function App() {
   const [branches, setBranches] = useState<string[]>([]);
   const [branchSel, setBranchSel] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
+  const [applied, setApplied] = useState<string | null>(null);
+  const [detailSummary, setDetailSummary] = useState<string | null>(null);
 
   async function reload(): Promise<void> {
     if (await storeExists(targetRoot)) {
       const cfg = await readConfig(targetRoot);
       const ws = await listWorkspaces(targetRoot);
+      const lock = await currentApplyLock(targetRoot);
       setConfig(cfg);
       setWorkspaces(ws);
+      setApplied(lock?.workspace ?? null);
       setSelected((s) => Math.min(s, Math.max(0, ws.length - 1)));
       setView("list");
     } else {
@@ -160,6 +166,52 @@ export function App() {
     setView("list");
   }
 
+  async function doApply(): Promise<void> {
+    const ws = workspaces[selected];
+    if (!ws) return;
+    try {
+      const manifest = await applyToBase(targetRoot, ws.name);
+      setNotice(`Applied "${ws.name}" — ${manifest.files.length} file(s) on base. Press v to revert.`);
+      await reload();
+    } catch (e) {
+      setNotice(errMsg(e));
+    }
+  }
+
+  async function doRevert(): Promise<void> {
+    try {
+      const manifest = await revertFromBase(targetRoot, {});
+      setNotice(`Reverted "${manifest.workspace}". Base is pristine.`);
+      await reload();
+    } catch (e) {
+      setNotice(errMsg(e));
+    }
+  }
+
+  async function openDetail(): Promise<void> {
+    const ws = workspaces[selected];
+    if (!ws) return;
+    setDetailSummary(null);
+    setView("detail");
+    try {
+      const changes = await collectChanges(targetRoot, ws.name);
+      if (changes.length === 0) {
+        setDetailSummary("No changes against the base.");
+      } else {
+        const added = changes.filter((c) => c.action === "added").length;
+        const modified = changes.length - added;
+        const preview = changes
+          .slice(0, 8)
+          .map((c) => `  ${c.action === "added" ? "A" : "M"} ${c.rel}`)
+          .join("\n");
+        const more = changes.length > 8 ? `\n  … ${changes.length - 8} more` : "";
+        setDetailSummary(`${modified} modified, ${added} added:\n${preview}${more}`);
+      }
+    } catch (e) {
+      setDetailSummary(errMsg(e));
+    }
+  }
+
   useInput((input, key) => {
     // Text-entry views own their input (handled by TextPrompt).
     if (view === "create" || view === "materialize") return;
@@ -209,8 +261,14 @@ export function App() {
         setNotice(null);
         setView("materialize");
       }
+    } else if (input === "a") {
+      setNotice(null);
+      void doApply();
+    } else if (input === "v") {
+      setNotice(null);
+      void doRevert();
     } else if (key.return) {
-      if (workspaces[selected]) setView("detail");
+      if (workspaces[selected]) void openDetail();
     } else if (input === "r") void reload();
     else if (input === "q") exit();
   });
@@ -219,7 +277,7 @@ export function App() {
 
   return (
     <Box flexDirection="column">
-      <Header config={config} />
+      <Header config={config} appliedWorkspace={applied} />
 
       {view === "loading" && (
         <Box paddingX={1}>
@@ -237,13 +295,16 @@ export function App() {
       {view === "branch-select" && <BranchSelect branches={branches} selected={branchSel} />}
 
       {(view === "list" || view === "detail" || view === "confirm-delete") && (
-        <WorkspaceList items={workspaces} selected={selected} />
+        <WorkspaceList items={workspaces} selected={selected} appliedWorkspace={applied} />
       )}
 
       {view === "detail" && selectedWs && (
         <Box flexDirection="column" paddingX={1} marginTop={1}>
           <Text bold>{selectedWs.name}</Text>
           <Text dimColor>path: {workspacePath(targetRoot, selectedWs.name)}</Text>
+          <Text> </Text>
+          <Text>Changes vs base:</Text>
+          <Text color="cyan">{detailSummary ?? "computing…"}</Text>
           <Text> </Text>
           <Text>Agent instruction:</Text>
           <Text color="green">{agentInstruction(workspacePath(targetRoot, selectedWs.name))}</Text>

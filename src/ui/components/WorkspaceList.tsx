@@ -4,9 +4,11 @@ import type { WorkspaceInfo } from "../../core/workspaces.js";
 export function WorkspaceList({
   items,
   selected,
+  appliedWorkspace,
 }: {
   items: WorkspaceInfo[];
   selected: number;
+  appliedWorkspace: string | null;
 }) {
   if (items.length === 0) {
     return (
@@ -23,10 +25,12 @@ export function WorkspaceList({
         const active = i === selected;
         const count = ws.fileCount == null ? "—" : `${ws.fileCount} files`;
         const base = ws.baseBranch ?? "no base";
+        const applied = ws.name === appliedWorkspace;
         return (
           <Text key={ws.name} color={active ? "cyan" : undefined}>
             {active ? "❯ " : "  "}
             {ws.name} <Text dimColor>{count} · base {base}</Text>
+            {applied ? <Text color="yellow"> ● applied</Text> : null}
           </Text>
         );
       })}
