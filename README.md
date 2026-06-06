@@ -42,6 +42,30 @@ Copy-on-write is triggered two ways:
    `MultiEdit`, materializing the symlink automatically. The agent does nothing
    special.
 
+## Landing the work: apply, branch, lock
+
+A workspace is throwaway by design — but when an agent's changes are good, you
+need a way to get them out. FeverDreams offers two paths, both built on a
+**file-level snapshot** of the workspace's diff (modified + added files):
+
+- **`apply`** copies the diff onto the base working tree (backing up every file it
+  overwrites) so you can test it in place, then **`revert`** restores the base
+  exactly. `apply --run "<cmd>"` does a one-shot apply → run → revert.
+- **`branch`** applies the diff, commits exactly those files to a **new git
+  branch**, optionally pushes, then checks back out to the branch you were on and
+  restores the base — leaving you with a clean branch and a pristine working tree.
+  Only the changed files are staged, so `.feverdreams/` is never committed.
+
+Both operations run under a single **lock**: while one workspace is applied (or
+being branched), the base is marked busy and no other workspace can be applied.
+The lock is released on `revert` (and automatically at the end of `branch` /
+`apply --run`). `feverdreams status` shows who holds it; a stuck lock from a
+crashed run can be cleared with `feverdreams revert --force`.
+
+`branch` refuses up front if the base repo has **uncommitted tracked changes**,
+isn't a git repo, or the target branch already exists — so it never tangles your
+in-progress work into the commit.
+
 ## Install
 
 Requires **Node ≥ 20** (macOS / Linux).
@@ -70,7 +94,7 @@ easiest way to drive everything. It's an always-running app (built with
  Workspaces (2)
  ❯ ws1   3 files · base main
    ws2   5 files · base main
- ↑↓ move   ↵ open   n new   m materialize   d delete   r reload   q quit
+ ↑↓ move  ↵ open  n new  m materialize  a apply  b branch  v revert  d delete  q quit
 ```
 
 | Key | Action |
@@ -79,6 +103,9 @@ easiest way to drive everything. It's an always-running app (built with
 | `↵` | Open the selected workspace (path + ready-to-paste agent instruction) |
 | `n` | Create a new workspace (prompts for a name) |
 | `m` | Copy-on-write a file in the selected workspace (prompts for a path) |
+| `a` | Apply the selected workspace's changes onto the base (takes the lock) |
+| `b` | Commit the selected workspace to a new git branch (prompts for branch name + message) |
+| `v` | Revert the base to pristine and release the lock |
 | `d` | Delete the selected workspace (confirm with `y`) |
 | `r` | Reload the list |
 | `i` | Initialize the store (shown when the folder has none; picks a base branch) |
@@ -109,6 +136,21 @@ feverdreams workspace remove ws1
 
 # Copy-on-write a file by hand (usually the hook does this for you)
 feverdreams materialize ws1 src/app.ts
+
+# 4. See what a workspace would change against the base
+feverdreams diff ws1
+
+# 5a. Apply the workspace onto the base to try it (backs up first, takes the lock)
+feverdreams apply ws1
+feverdreams status            # who holds the base right now
+feverdreams revert            # restore the base to pristine, release the lock
+
+# 5b. Or run a command against the applied base and auto-revert afterwards
+feverdreams apply ws1 --run "npm test"
+
+# 6. Land the work as a git branch (apply → commit → return to your branch)
+feverdreams branch ws1 my-feature -m "feat: my feature"
+feverdreams branch ws1 my-feature -m "feat: my feature" --push   # also push to origin
 ```
 
 ## Commands
@@ -121,6 +163,11 @@ feverdreams materialize ws1 src/app.ts
 | `feverdreams workspace list` | List workspaces. |
 | `feverdreams workspace remove <name>` | Delete a workspace (`-y` to skip confirmation). Originals are untouched. |
 | `feverdreams materialize <ws> <path>` | Replace a workspace symlink with a real copy (copy-on-write). Idempotent. |
+| `feverdreams diff <ws>` | Show the files a workspace would change against the base (`M` modified, `A` added). |
+| `feverdreams apply <ws>` | Apply a workspace's changes onto the base (backs up first, takes the lock). `--run "<cmd>"` applies, runs the command, then auto-reverts. |
+| `feverdreams revert [ws]` | Restore the base to pristine and release the lock. `-f`/`--force` clears a stuck lock left by a crashed run. |
+| `feverdreams branch <ws> <name>` | Apply the workspace, commit exactly its files to a new git branch `<name>`, then return to your branch and restore the base. `-m <msg>` (required) sets the commit message; `--push` pushes to `origin`. |
+| `feverdreams status` | Show whether the base currently holds an applied workspace (holder, operation, since). |
 | `feverdreams hook run` | PreToolUse hook entry point — reads the tool payload on stdin and materializes the target if needed. |
 
 ## What gets mirrored
@@ -136,6 +183,10 @@ original. Skipped: a built-in denylist (`node_modules`, `.git`, `.feverdreams`,
 ```
 .feverdreams/
 ├── config.json                 # base branch + commit, target root, created_at
+├── apply-session/              # present only while a workspace is applied (the lock)
+│   ├── lock.json               # "base is busy" marker + holder (pid/host/session)
+│   ├── manifest.json           # what was applied, so revert can undo it
+│   └── backup/                 # originals of every base file that was overwritten
 └── workspaces/
     └── ws1/
         ├── .workspace.json      # workspace metadata
@@ -143,6 +194,9 @@ original. Skipped: a built-in denylist (`node_modules`, `.git`, `.feverdreams`,
         ├── .claude/settings.json# PreToolUse copy-on-write hook
         └── <project mirror>     # real dirs + file symlinks
 ```
+
+> Add `.feverdreams/` to your project's `.gitignore` — it's a transient store,
+> not something to commit.
 
 ## Development
 
@@ -155,10 +209,15 @@ npm run build           # compile to dist/
 
 ## Scope
 
-Current scope: `init`, workspace create/list/remove, and copy-on-write. Out of
-scope for now: applying changes back to the base branch, diffing, lock-based
-coordination between agents, Windows, and non-Node projects (these may work but
-aren't polished).
+Current scope: `init`, workspace create/list/remove, copy-on-write, `diff`,
+`apply`/`revert` (with backups and a single-slot lock), and `branch` (commit a
+workspace to a new git branch, optionally pushing).
+
+Out of scope for now: applying more than one workspace at a time (the lock is
+intentionally single-slot), reverting file *deletions* made in a workspace
+(only modified + added files are tracked), TTL/heartbeat auto-release of a stuck
+lock (recover manually with `revert --force`), cross-host lock detection,
+Windows, and non-Node projects (these may work but aren't polished).
 
 ## Contributing
 
