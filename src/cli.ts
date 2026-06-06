@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import { initCommand } from "./commands/init.js";
 import { workspaceCreate, workspaceList, workspaceRemove } from "./commands/workspace.js";
@@ -8,12 +9,19 @@ import { branchCommand } from "./commands/branch.js";
 import { diffCommand } from "./commands/diff.js";
 import { hookRun } from "./commands/hook.js";
 
+// Single source of truth for the version: read it from package.json at runtime.
+// `src/cli.ts` (dev via tsx) and `dist/cli.js` (built) both sit one level under the
+// repo root, so this resolves to the root package.json in either layout.
+const pkg = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+) as { version: string };
+
 const program = new Command();
 
 program
   .name("feverdreams")
   .description("FeverDreams — copy-on-write AI agent workspaces over your project")
-  .version("0.1.0")
+  .version(pkg.version)
   .action(async () => {
     // Bare `feverdreams` (no subcommand) launches the interactive UI.
     // Dynamic import keeps Ink off the hot path of `hook run` and other commands.

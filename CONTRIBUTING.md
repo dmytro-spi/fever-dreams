@@ -57,3 +57,18 @@ When you change the CLI surface (add/rename a command or flag), keep the
 agent-facing docs in sync: `skills/feverdreams/SKILL.md`,
 `skills/feverdreams/reference.md`, the `/feverdreams:new` and `/feverdreams:branch`
 skills, and `AGENTS.md`.
+
+## Releasing
+
+`package.json` is the single source of truth for the version. The CLI reads it at
+runtime (`feverdreams --version`), and the Claude Code plugin files
+(`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`) are kept in sync by
+`scripts/sync-version.mjs`, which runs automatically on bump.
+
+1. Move the `## [Unreleased]` notes in `CHANGELOG.md` under a new version heading.
+2. On a clean working tree, run `npm version patch|minor|major`. This bumps
+   `package.json`, syncs the plugin files, and creates the version commit **and** git
+   tag in one step.
+3. `git push --follow-tags`.
+
+To preview the sync without bumping, run `npm run sync-version`.
